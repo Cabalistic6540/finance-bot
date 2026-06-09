@@ -3,7 +3,7 @@ const app = express();
 app.use(express.json());
 
 const CHANNEL_ACCESS_TOKEN = '4AorV6TX61DNZHcbS94YJN3EjSqAzXgAXgw5ULLJCTKNBUrJ8cFaKdGVzjfHP49Hw+XHk25POoHpykxZQlXTWT48v/fAOVeaKoc89lmQNc0Y0XfaEyl+7IdVeY/xgVR0RxzwKHy04xbyZiTtz2nJKgdB04t89/1O/w1cDnyilFU=';
-const CLAUDE_API_KEY = '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';
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const DEBT_NAMES = ['UMAY+', 'บัตรเครดิต', 'กยศ.', 'Shopee Pay', 'First Choice', 'Promise', 'LINE BK', 'TikTok PayLater', 'ค่าประกัน'];
 
 async function replyMessage(replyToken, text) {
