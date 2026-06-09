@@ -55,6 +55,7 @@ async function analyzeWithClaude(imageBase64) {
     }),
   });
   const data = await res.json();
+  console.log('Claude response:', JSON.stringify(data));
   const text = data.content?.map(c => c.text || '').join('');
   const clean = text.replace(/```json|```/g, '').trim();
   return JSON.parse(clean);
