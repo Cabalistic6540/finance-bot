@@ -84,7 +84,8 @@ app.post('/webhook', async (req, res) => {
           `⚠️ ตรวจสอบตัวเลขก่อนนำไปใช้นะครับ`,
         ].filter(Boolean).join('\n');
         await pushMessage(to, lines);
-      } catch (err) {
+     } catch (err) {
+        console.error('Error:', err.message, JSON.stringify(err));
         await pushMessage(to, '❌ อ่านรูปไม่ได้ครับ ลองส่งใหม่อีกครั้ง');
       }
     } else if (event.type === 'message' && event.message.type === 'text') {
