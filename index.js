@@ -1,10 +1,17 @@
 const express = require('express');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
+
 const app = express();
 app.use(express.json());
 
-const CHANNEL_ACCESS_TOKEN = '4AorV6TX61DNZHcbS94YJN3EjSqAzXgAXgw5ULLJCTKNBUrJ8cFaKdGVzjfHP49Hw+XHk25POoHpykxZQlXTWT48v/fAOVeaKoc89lmQNc0Y0XfaEyl+7IdVeY/xgVR0RxzwKHy04xbyZiTtz2nJKgdB04t89/1O/w1cDnyilFU=';
+const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const DEBT_NAMES = ['UMAY+', 'บัตรเครดิต', 'กยศ.', 'Shopee Pay', 'First Choice', 'Promise', 'LINE BK', 'TikTok PayLater', 'ค่าประกัน'];
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+initializeApp({ credential: cert(serviceAccount) });
+const db = getFirestore();
 
 async function replyMessage(replyToken, text) {
   await fetch('https://api.line.me/v2/bot/message/reply', {
@@ -61,6 +68,19 @@ async function analyzeWithClaude(imageBase64) {
   return JSON.parse(clean);
 }
 
+async function saveToFirestore(profileKey, debtName, balance, minPay) {
+  try {
+    const ref = db.collection('debts').doc(profileKey);
+    const doc = await ref.get();
+    const existing = doc.exists ? doc.data() : {};
+    existing[debtName] = { balance, minPay: minPay || existing[debtName]?.minPay || 0, updatedAt: new Date().toISOString() };
+    await ref.set(existing);
+    console.log('Saved to Firestore:', profileKey, debtName, balance);
+  } catch (err) {
+    console.error('Firestore error:', err.message);
+  }
+}
+
 app.post('/webhook', async (req, res) => {
   const events = req.body?.events || [];
   res.status(200).json({ ok: true });
@@ -75,22 +95,30 @@ app.post('/webhook', async (req, res) => {
       try {
         const imageBase64 = await getImageContent(event.message.id);
         const result = await analyzeWithClaude(imageBase64);
+        await saveToFirestore('ct', result.debtName, result.balance, result.minPay);
         const lines = [
-          `✅ อ่านได้แล้วครับ`,
+          `✅ อ่านและบันทึกแล้วครับ`,
           `📋 หนี้: ${result.debtName}`,
           `💰 ยอดคงเหลือ: ฿${Number(result.balance).toLocaleString('th-TH')}`,
           result.minPay ? `⚡ ขั้นต่ำ: ฿${Number(result.minPay).toLocaleString('th-TH')}` : null,
           result.dueDay ? `📅 ครบกำหนด: วันที่ ${result.dueDay}` : null,
           ``,
-          `⚠️ ตรวจสอบตัวเลขก่อนนำไปใช้นะครับ`,
+          `✨ แอพจะอัปเดตยอดอัตโนมัติแล้วครับ`,
         ].filter(Boolean).join('\n');
         await pushMessage(to, lines);
-     } catch (err) {
-        console.error('Error:', err.message, JSON.stringify(err));
+      } catch (err) {
+        console.error('Error:', err.message);
         await pushMessage(to, '❌ อ่านรูปไม่ได้ครับ ลองส่งใหม่อีกครั้ง');
       }
     } else if (event.type === 'message' && event.message.type === 'text') {
-      await replyMessage(event.replyToken, '📷 ส่งรูปหน้าจอแอพหนี้มาได้เลยครับ จะอ่านยอดให้อัตโนมัติ');
+      const text = event.message.text.toLowerCase();
+      if (text.includes('โปรไฟล์ขวัญ') || text.includes('kwan')) {
+        await replyMessage(event.replyToken, '✅ เปลี่ยนเป็นโปรไฟล์ขวัญแล้วครับ ส่งรูปได้เลย');
+      } else if (text.includes('โปรไฟล์โตส') || text.includes('ctos')) {
+        await replyMessage(event.replyToken, '✅ เปลี่ยนเป็นโปรไฟล์โตสแล้วครับ ส่งรูปได้เลย');
+      } else {
+        await replyMessage(event.replyToken, '📷 ส่งรูปหน้าจอแอพหนี้มาได้เลยครับ\n\nพิมพ์ "โปรไฟล์ขวัญ" หรือ "โปรไฟล์โตส" เพื่อเปลี่ยนโปรไฟล์');
+      }
     }
   }
 });
