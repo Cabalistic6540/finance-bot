@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { salaryPeriodForDate } from './payday-calendar.mjs';
 
 export const REMINDER_COLLECTION = 'financeReminderDeliveries_v1';
 const names = {
@@ -42,7 +43,7 @@ export function createReminderSender(config, store, fetcher = fetch, clock = () 
     const now = clock(); const current = reminderClock(now);
     const text = reminderMessage(input.creditorIds);
     if (input.date !== current.date) throw new Error('Reminder date must be today in Bangkok');
-    const isSalaryDay = ['05', '20'].includes(current.date.slice(-2));
+    const isSalaryDay = !!salaryPeriodForDate(current.date);
     if (input.dryRun === true) return { ok: true, dryRun: true, eligible: isSalaryDay && current.hour >= 20, date: current.date, text };
     if (!isSalaryDay) return { ok: true, sent: false, reason: 'not-salary-day', date: current.date };
     if (current.hour < 20) return { ok: true, sent: false, reason: 'before-20:00', date: current.date };
