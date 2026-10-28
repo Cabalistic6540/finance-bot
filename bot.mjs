@@ -39,7 +39,7 @@ export function loadConfig(env = process.env) {
   if (env.RENDER === 'true' && config.storageKind !== 'firestore') throw new Error('Render must use FINANCE_STORAGE=firestore to preserve receipts.');
   return config;
 }
-export async function createFinanceBot(config, fetcher = fetch, providedStore = null) {
+export async function createFinanceBot(config, fetcher = fetch, providedStore = null, reminderSender = null) {
   if (config.storageKind === 'firestore' && !providedStore) throw new Error('Firestore store must be initialized before starting the bot.');
   const store = providedStore || await createFileStore(config.dataDir);
   const read = (id) => store.read(id);
@@ -126,9 +126,19 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
     try {
       const url = new URL(req.url, 'http://local');
       if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('Finance Bot running!'); return; }
-      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, storage: store.kind }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, reminderApiVersion: reminderSender ? 1 : 0, storage: store.kind }); return; }
       if (url.pathname.startsWith('/finance/')) {
         if (!authorize(req.headers.authorization, config.syncToken)) { json(401, { error: 'Unauthorized' }); return; }
+        if (url.pathname === '/finance/reminders/check' && req.method === 'POST') {
+          if (!reminderSender) { json(503, { error: 'Reminder service unavailable' }); return; }
+          if (!String(req.headers['content-type'] || '').startsWith('application/json')) { json(415, { error: 'Use JSON' }); return; }
+          const chunks = []; let size = 0;
+          for await (const chunk of req) { size += chunk.length; if (size > 4096) { json(413, { error: 'Too large' }); return; } chunks.push(chunk); }
+          const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (!input || !Array.isArray(input.creditorIds) || typeof input.date !== 'string') { json(400, { error: 'Invalid reminder' }); return; }
+          const result = await reminderSender(input);
+          json(200, result); return;
+        }
         if (req.method !== 'GET') { json(405, { error: 'Method not allowed' }); return; }
         if (url.pathname === '/finance/receipts') {
           const after = url.searchParams.get('after') || '';
