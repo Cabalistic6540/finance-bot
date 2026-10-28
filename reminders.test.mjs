@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createReminderStore, createReminderSender, reminderClock, reminderMessage } from './reminders.mjs';
+import { salaryDatesForMonth } from './payday-calendar.mjs';
 
 function memoryDb() {
   const documents = new Map(); let tail = Promise.resolve();
@@ -75,4 +76,14 @@ test('a non-payday cannot send even after 20:00 or from an old schedule', async 
   assert.equal((await sender({ ...today, dryRun: true })).eligible, false);
   assert.equal(calls, 0); assert.equal(claims, 0);
   assert.match(reminderMessage(input.creditorIds), /วันนี้เงินเดือนออก/);
+});
+test('Sunday payday sends on the preceding Saturday, never on the original Sunday', async () => {
+  assert.deepEqual(salaryDatesForMonth(2026, 7).map((p) => p.date), ['2026-07-04', '2026-07-20']);
+  for (const [date, shouldSend] of [['2026-07-04', true], ['2026-07-05', false], ['2026-09-19', true], ['2026-09-20', false], ['2026-12-04', false], ['2026-12-05', true], ['2026-12-19', true], ['2026-12-20', false]]) {
+    let calls = 0;
+    const sender = createReminderSender(config, createReminderStore(memoryDb()), async () => { calls++; return new Response('{}', { status: 200 }); }, () => new Date(`${date}T13:00:00Z`));
+    const result = await sender({ ...input, date });
+    assert.equal(result.sent, shouldSend, date);
+    assert.equal(calls, shouldSend ? 1 : 0, date);
+  }
 });
