@@ -3,6 +3,7 @@ import { salaryPeriodForDate } from './payday-calendar.mjs';
 
 export const REMINDER_COLLECTION = 'financeReminderDeliveries_v1';
 const names = {
+  'car-refinance': 'ค่ารีไฟแนนซ์รถ',
   'first-choice-visa': 'First Choice Visa', 'first-choice-mastercard': 'บัตรเครดิต Platinum Mastercard',
   promise: 'Promise', umay: 'UMAY+', 'line-bk': 'LINE BK', shopee: 'Shopee Pay', tiktok: 'TikTok PayLater',
   'student-loan': 'กยศ.', wangjai: 'สินเชื่อวางใจ', insurance: 'ค่าประกัน',
@@ -13,7 +14,7 @@ export function reminderClock(now = new Date()) {
   return { date: `${part('year')}-${part('month')}-${part('day')}`, hour: Number(part('hour')) };
 }
 export function reminderMessage(ids) {
-  if (!Array.isArray(ids) || !ids.length || ids.length > 10 || ids.some((id) => !Object.hasOwn(names, id)) || new Set(ids).size !== ids.length) throw new Error('Invalid reminder creditors');
+  if (!Array.isArray(ids) || !ids.length || ids.length > Object.keys(names).length || ids.some((id) => !Object.hasOwn(names, id)) || new Set(ids).size !== ids.length) throw new Error('Invalid reminder creditors');
   return `วันนี้เงินเดือนออกครับ\nรายการในรอบเงินเดือนนี้: ${ids.map((id) => names[id]).join(', ')}\nอย่าลืมส่งสลิปหลังชำระเงินนะครับ\nถ้าส่งสลิปให้บอทแล้ว ข้ามข้อความนี้ได้เลยครับ`;
 }
 export function createReminderStore(db) {
