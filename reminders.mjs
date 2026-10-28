@@ -13,7 +13,7 @@ export function reminderClock(now = new Date()) {
 }
 export function reminderMessage(ids) {
   if (!Array.isArray(ids) || !ids.length || ids.length > 10 || ids.some((id) => !Object.hasOwn(names, id)) || new Set(ids).size !== ids.length) throw new Error('Invalid reminder creditors');
-  return `วันนี้เป็นวันจ่ายตามแผน: ${ids.map((id) => names[id]).join(', ')}\nอย่าลืมส่งสลิปหลังชำระเงินนะครับ\nถ้าส่งสลิปให้บอทแล้ว ข้ามข้อความนี้ได้เลยครับ`;
+  return `วันนี้เงินเดือนออกครับ\nรายการในรอบเงินเดือนนี้: ${ids.map((id) => names[id]).join(', ')}\nอย่าลืมส่งสลิปหลังชำระเงินนะครับ\nถ้าส่งสลิปให้บอทแล้ว ข้ามข้อความนี้ได้เลยครับ`;
 }
 export function createReminderStore(db) {
   const collection = db.collection(REMINDER_COLLECTION);
@@ -42,7 +42,9 @@ export function createReminderSender(config, store, fetcher = fetch, clock = () 
     const now = clock(); const current = reminderClock(now);
     const text = reminderMessage(input.creditorIds);
     if (input.date !== current.date) throw new Error('Reminder date must be today in Bangkok');
-    if (input.dryRun === true) return { ok: true, dryRun: true, eligible: current.hour >= 20, date: current.date, text };
+    const isSalaryDay = ['05', '20'].includes(current.date.slice(-2));
+    if (input.dryRun === true) return { ok: true, dryRun: true, eligible: isSalaryDay && current.hour >= 20, date: current.date, text };
+    if (!isSalaryDay) return { ok: true, sent: false, reason: 'not-salary-day', date: current.date };
     if (current.hour < 20) return { ok: true, sent: false, reason: 'before-20:00', date: current.date };
     const recipient = config.owners[0];
     const key = createHash('sha256').update(`${recipient}|${current.date}`).digest('hex');
