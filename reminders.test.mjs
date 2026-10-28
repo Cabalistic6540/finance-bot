@@ -16,14 +16,14 @@ function memoryDb() {
   };
 }
 const config = { owners: ['U' + '1'.repeat(32)], lineToken: 'fixture-token' };
-const input = { date: '2026-10-28', creditorIds: ['first-choice-visa'] };
+const input = { date: '2026-10-20', creditorIds: ['first-choice-visa'] };
 test('reminder clock, validation, dry run and time boundary do not send', async () => {
   assert.deepEqual(reminderClock(new Date('2026-10-28T13:00:00Z')), { date: '2026-10-28', hour: 20 });
   assert.deepEqual(reminderClock(new Date('2026-10-28T17:00:00Z')), { date: '2026-10-29', hour: 0 });
   assert.throws(() => reminderMessage(['unknown']), /Invalid/);
   assert.throws(() => reminderMessage(['umay', 'umay']), /Invalid/);
   let calls = 0;
-  const sender = createReminderSender(config, createReminderStore(memoryDb()), async () => { calls++; }, () => new Date('2026-10-28T12:59:59Z'));
+  const sender = createReminderSender(config, createReminderStore(memoryDb()), async () => { calls++; }, () => new Date('2026-10-20T12:59:59Z'));
   assert.equal((await sender(input)).reason, 'before-20:00');
   const preview = await sender({ ...input, dryRun: true });
   assert.equal(preview.dryRun, true); assert.match(preview.text, /อย่าลืมส่งสลิป/);
@@ -39,7 +39,7 @@ test('one owner-only push per day survives concurrent triggers and restarts', as
     assert.match(options.headers['X-Line-Retry-Key'], /^[a-f0-9-]{36}$/);
     return new Response('{}', { status: 200 });
   };
-  const clock = () => new Date('2026-10-28T13:00:00Z');
+  const clock = () => new Date('2026-10-20T13:00:00Z');
   const sender = createReminderSender(config, createReminderStore(db), fetcher, clock);
   const results = await Promise.all([sender(input), sender({ ...input, to: 'other-user' })]);
   assert.equal(results.filter((r) => r.sent).length, 1); assert.equal(calls, 1);
@@ -47,7 +47,7 @@ test('one owner-only push per day survives concurrent triggers and restarts', as
   assert.equal((await restarted(input)).reason, 'already-handled'); assert.equal(calls, 1);
 });
 test('timeout retry keeps the same payload and retry key; accepted 409 stops retries', async () => {
-  const db = memoryDb(); let now = new Date('2026-10-28T13:00:00Z'); const requests = [];
+  const db = memoryDb(); let now = new Date('2026-10-20T13:00:00Z'); const requests = [];
   const sender = createReminderSender(config, createReminderStore(db), async (_, options) => {
     requests.push(options);
     if (requests.length === 1) throw new Error('network timeout');
@@ -55,7 +55,7 @@ test('timeout retry keeps the same payload and retry key; accepted 409 stops ret
   }, () => now);
   await assert.rejects(sender(input), /temporarily unavailable/);
   assert.equal((await sender(input)).reason, 'already-handled');
-  now = new Date('2026-10-28T13:00:31Z');
+  now = new Date('2026-10-20T13:00:31Z');
   assert.equal((await sender({ ...input, creditorIds: ['umay'] })).accepted, true);
   assert.equal(requests[0].body, requests[1].body);
   assert.equal(requests[0].headers['X-Line-Retry-Key'], requests[1].headers['X-Line-Retry-Key']);
@@ -63,7 +63,16 @@ test('timeout retry keeps the same payload and retry key; accepted 409 stops ret
 });
 test('4xx is held for review rather than repeatedly pushing', async () => {
   const db = memoryDb(); let calls = 0;
-  const sender = createReminderSender(config, createReminderStore(db), async () => { calls++; return new Response('{}', { status: 403 }); }, () => new Date('2026-10-28T13:00:00Z'));
+  const sender = createReminderSender(config, createReminderStore(db), async () => { calls++; return new Response('{}', { status: 403 }); }, () => new Date('2026-10-20T13:00:00Z'));
   await assert.rejects(sender(input), /did not accept/);
   assert.equal((await sender(input)).reason, 'already-handled'); assert.equal(calls, 1);
+});
+test('a non-payday cannot send even after 20:00 or from an old schedule', async () => {
+  let calls = 0; let claims = 0;
+  const sender = createReminderSender(config, { claim: async () => { claims++; } }, async () => { calls++; }, () => new Date('2026-10-28T13:00:00Z'));
+  const today = { ...input, date: '2026-10-28' };
+  assert.equal((await sender(today)).reason, 'not-salary-day');
+  assert.equal((await sender({ ...today, dryRun: true })).eligible, false);
+  assert.equal(calls, 0); assert.equal(claims, 0);
+  assert.match(reminderMessage(input.creditorIds), /วันนี้เงินเดือนออก/);
 });
