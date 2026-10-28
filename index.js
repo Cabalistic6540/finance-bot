@@ -1,129 +1,24 @@
-const express = require('express');
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
+import { createFinanceBot, loadConfig } from './bot.mjs';
+import { createFirestoreStore } from './storage.mjs';
 
-const app = express();
-app.use(express.json());
-
-const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
-const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
-const DEBT_NAMES = ['UMAY+', 'บัตรเครดิต', 'กยศ.', 'Shopee Pay', 'First Choice', 'Promise', 'LINE BK', 'TikTok PayLater', 'ค่าประกัน'];
-
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-initializeApp({ credential: cert(serviceAccount) });
-const db = getFirestore();
-
-async function replyMessage(replyToken, text) {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}` },
-    body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] }),
-  });
-}
-
-async function pushMessage(to, text) {
-  await fetch('https://api.line.me/v2/bot/message/push', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}` },
-    body: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
-  });
-}
-
-async function getImageContent(messageId) {
-  const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
-    headers: { 'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}` },
-  });
-  const buffer = await res.arrayBuffer();
-  return Buffer.from(buffer).toString('base64');
-}
-
-async function analyzeWithClaude(imageBase64) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': CLAUDE_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-          { type: 'text', text: `รูปนี้เป็นหน้าจอแอพหนี้หรือสลิป อ่านข้อมูลและตอบเป็น JSON เท่านั้น ไม่ต้องมีข้อความอื่น:
-{"debtName": "ชื่อหนี้", "balance": ตัวเลข, "minPay": ตัวเลขหรือ null, "dueDay": ตัวเลขหรือ null}
-
-รายชื่อหนี้ที่มี: ${DEBT_NAMES.join(', ')}
-เลือกชื่อที่ใกล้เคียงที่สุด` }
-        ]
-      }]
-    }),
-  });
-  const data = await res.json();
-  console.log('Claude response:', JSON.stringify(data));
-  const text = data.content?.map(c => c.text || '').join('');
-  const clean = text.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
-}
-
-async function saveToFirestore(profileKey, debtName, balance, minPay) {
-  try {
-    const ref = db.collection('debts').doc(profileKey);
-    const doc = await ref.get();
-    const existing = doc.exists ? doc.data() : {};
-    existing[debtName] = { balance, minPay: minPay || existing[debtName]?.minPay || 0, updatedAt: new Date().toISOString() };
-    await ref.set(existing);
-    console.log('Saved to Firestore:', profileKey, debtName, balance);
-  } catch (err) {
-    console.error('Firestore error:', err.message);
+try {
+  const config = loadConfig();
+  let store = null;
+  if (config.storageKind === 'firestore') {
+    const { initializeApp, cert } = await import('firebase-admin/app');
+    const { getFirestore } = await import('firebase-admin/firestore');
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    const firebase = initializeApp({ credential: cert(serviceAccount) });
+    store = await createFirestoreStore(getFirestore(firebase));
   }
+  const bot = await createFinanceBot(config, fetch, store);
+  const port = Number(process.env.PORT || 3000);
+  bot.server.listen(port, '0.0.0.0', () => console.log(`Finance Bot listening on port ${port}`));
+  const timer = setInterval(() => bot.drain().catch(() => {}), 10000);
+  bot.drain().catch(() => {});
+  const stop = () => { clearInterval(timer); bot.server.close(async () => { await bot.close(); process.exit(0); }); };
+  process.on('SIGTERM', stop); process.on('SIGINT', stop);
+} catch (error) {
+  console.error('Finance Bot could not start. Check credentials, storage access, and required settings.');
+  process.exitCode = 1;
 }
-
-app.post('/webhook', async (req, res) => {
-  const events = req.body?.events || [];
-  res.status(200).json({ ok: true });
-
-  for (const event of events) {
-    const userId = event.source?.userId;
-    const groupId = event.source?.groupId;
-    const to = groupId || userId;
-
-    if (event.type === 'message' && event.message.type === 'image') {
-      await replyMessage(event.replyToken, '⏳ กำลังอ่านรูป รอแป๊บนึงครับ...');
-      try {
-        const imageBase64 = await getImageContent(event.message.id);
-        const result = await analyzeWithClaude(imageBase64);
-        await saveToFirestore('ct', result.debtName, result.balance, result.minPay);
-        const lines = [
-          `✅ อ่านและบันทึกแล้วครับ`,
-          `📋 หนี้: ${result.debtName}`,
-          `💰 ยอดคงเหลือ: ฿${Number(result.balance).toLocaleString('th-TH')}`,
-          result.minPay ? `⚡ ขั้นต่ำ: ฿${Number(result.minPay).toLocaleString('th-TH')}` : null,
-          result.dueDay ? `📅 ครบกำหนด: วันที่ ${result.dueDay}` : null,
-          ``,
-          `✨ แอพจะอัปเดตยอดอัตโนมัติแล้วครับ`,
-        ].filter(Boolean).join('\n');
-        await pushMessage(to, lines);
-      } catch (err) {
-        console.error('Error:', err.message);
-        await pushMessage(to, '❌ อ่านรูปไม่ได้ครับ ลองส่งใหม่อีกครั้ง');
-      }
-    } else if (event.type === 'message' && event.message.type === 'text') {
-      const text = event.message.text.toLowerCase();
-      if (text.includes('โปรไฟล์ขวัญ') || text.includes('kwan')) {
-        await replyMessage(event.replyToken, '✅ เปลี่ยนเป็นโปรไฟล์ขวัญแล้วครับ ส่งรูปได้เลย');
-      } else if (text.includes('โปรไฟล์โตส') || text.includes('ctos')) {
-        await replyMessage(event.replyToken, '✅ เปลี่ยนเป็นโปรไฟล์โตสแล้วครับ ส่งรูปได้เลย');
-      } else {
-        await replyMessage(event.replyToken, '📷 ส่งรูปหน้าจอแอพหนี้มาได้เลยครับ\n\nพิมพ์ "โปรไฟล์ขวัญ" หรือ "โปรไฟล์โตส" เพื่อเปลี่ยนโปรไฟล์');
-      }
-    }
-  }
-});
-
-app.get('/', (req, res) => res.send('Finance Bot running!'));
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
