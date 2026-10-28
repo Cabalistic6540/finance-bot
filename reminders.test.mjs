@@ -22,6 +22,7 @@ test('reminder clock, validation, dry run and time boundary do not send', async 
   assert.deepEqual(reminderClock(new Date('2026-10-28T13:00:00Z')), { date: '2026-10-28', hour: 20 });
   assert.deepEqual(reminderClock(new Date('2026-10-28T17:00:00Z')), { date: '2026-10-29', hour: 0 });
   assert.throws(() => reminderMessage(['unknown']), /Invalid/);
+  assert.match(reminderMessage(['car-refinance']), /ค่ารีไฟแนนซ์รถ/);
   assert.throws(() => reminderMessage(['umay', 'umay']), /Invalid/);
   let calls = 0;
   const sender = createReminderSender(config, createReminderStore(memoryDb()), async () => { calls++; }, () => new Date('2026-10-20T12:59:59Z'));
