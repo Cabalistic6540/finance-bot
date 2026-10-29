@@ -39,7 +39,7 @@ export function loadConfig(env = process.env) {
   if (env.RENDER === 'true' && config.storageKind !== 'firestore') throw new Error('Render must use FINANCE_STORAGE=firestore to preserve receipts.');
   return config;
 }
-export async function createFinanceBot(config, fetcher = fetch, providedStore = null, reminderSender = null) {
+export async function createFinanceBot(config, fetcher = fetch, providedStore = null, reminderSender = null, background = null) {
   if (config.storageKind === 'firestore' && !providedStore) throw new Error('Firestore store must be initialized before starting the bot.');
   const store = providedStore || await createFileStore(config.dataDir);
   const read = (id) => store.read(id);
@@ -81,7 +81,7 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
       if (!await store.complete(record, buffer, mimeType, analysis)) return;
       try {
         const suffix = analysis ? `\nหนี้: ${analysis.debtName}\nยอดหนี้: ${analysis.balance ?? 'ยังไม่ทราบ'}\nขั้นต่ำ: ${analysis.minPay ?? 'ยังไม่ทราบ'}` : '';
-        await reply(record, `รับรูปสำหรับโปรไฟล์${record.profileKey === 'kwan' ? 'ขวัญ' : 'โตส'}แล้วครับ เปิดแอพเพื่อตรวจข้อมูลและยืนยันก่อนบันทึกการจ่าย${suffix}`);
+        await reply(record, `รับรูปสำหรับโปรไฟล์${record.profileKey === 'kwan' ? 'ขวัญ' : 'โตส'}แล้วครับ ${background ? 'ระบบจะอ่านรูปออนไลน์ ข้อมูลครบจึงบันทึกอัตโนมัติ ส่วนที่ยังไม่ครบจะรอตรวจในแอพ' : 'เปิดแอพเพื่อตรวจข้อมูลและยืนยันก่อนบันทึกการจ่าย'}${suffix}`);
       } catch { /* A failed chat reply does not replay or discard the financial receipt. */ }
     } catch {
       await store.fail(record);
@@ -96,6 +96,7 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
           if (claimed) await processRecord(claimed);
         }
       }
+      await background?.drain();
     })().finally(() => { drainPromise = null; });
     return drainPromise;
   };
@@ -126,9 +127,15 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
     try {
       const url = new URL(req.url, 'http://local');
       if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('Finance Bot running!'); return; }
-      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, reminderApiVersion: reminderSender ? 4 : 0, storage: store.kind }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, reminderApiVersion: reminderSender ? 4 : 0, backgroundApiVersion:background?1:0, storage: store.kind }); return; }
       if (url.pathname.startsWith('/finance/')) {
         if (!authorize(req.headers.authorization, config.syncToken)) { json(401, { error: 'Unauthorized' }); return; }
+        if(url.pathname==='/finance/worker/config'&&req.method==='POST'){
+          if(!background){json(503,{error:'Background processor unavailable'});return;}
+          let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>16000){json(413,{error:'Too large'});return;}chunks.push(chunk);}
+          const result=await background.configure(JSON.parse(Buffer.concat(chunks).toString('utf8')));json(200,result);drain().catch(()=>{});return;
+        }
+        if(url.pathname==='/finance/worker/status'&&req.method==='GET'){json(200,background?await background.status():{enabled:false});return;}
         if (url.pathname === '/finance/reminders/check' && req.method === 'POST') {
           if (!reminderSender) { json(503, { error: 'Reminder service unavailable' }); return; }
           if (!String(req.headers['content-type'] || '').startsWith('application/json')) { json(415, { error: 'Use JSON' }); return; }
@@ -180,5 +187,5 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
       drain().catch(() => {});
     } catch (error) { if (!res.headersSent) json(error instanceof SyntaxError ? 400 : error.code === 'ENOENT' ? 404 : 500, { error: 'Request could not be processed' }); else res.end(); }
   });
-  return { server, drain, list, enqueue, close: () => store.close() };
+  return { server, drain, list, enqueue, close: async () => {await background?.close();await store.close();} };
 }
