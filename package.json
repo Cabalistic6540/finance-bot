@@ -8,9 +8,12 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test *.test.mjs"
+    "test": "node --test *.test.mjs",
+    "postinstall": "node scripts/prepare-ocr-models.mjs"
   },
   "dependencies": {
-    "firebase-admin": "14.5.0"
+    "firebase-admin": "14.5.0",
+    "sharp": "0.34.5",
+    "tesseract.js": "6.0.1"
   }
 }

@@ -1,11 +1,13 @@
 import { createFinanceBot, loadConfig } from './bot.mjs';
 import { createFirestoreStore } from './storage.mjs';
 import { createReminderStore, createReminderSender } from './reminders.mjs';
+import {createFirestoreProcessingStore,createBackgroundProcessor} from './background.mjs';
 
 try {
   const config = loadConfig();
   let store = null;
   let reminders = null;
+  let background = null;
   if (config.storageKind === 'firestore') {
     const { initializeApp, cert } = await import('firebase-admin/app');
     const { getFirestore } = await import('firebase-admin/firestore');
@@ -14,8 +16,9 @@ try {
     const db = getFirestore(firebase);
     store = await createFirestoreStore(db);
     reminders = createReminderSender(config, createReminderStore(db));
+    background = createBackgroundProcessor(config,store,await createFirestoreProcessingStore(db));
   }
-  const bot = await createFinanceBot(config, fetch, store, reminders);
+  const bot = await createFinanceBot(config, fetch, store, reminders,background);
   const port = Number(process.env.PORT || 3000);
   bot.server.listen(port, '0.0.0.0', () => console.log(`Finance Bot listening on port ${port}`));
   const timer = setInterval(() => bot.drain().catch(() => {}), 10000);

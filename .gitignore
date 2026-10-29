@@ -5,3 +5,5 @@ data/
 *.log
 node_modules/
 test/.tmp/
+ocr-models/
+*.traineddata
