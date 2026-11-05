@@ -127,7 +127,7 @@ export async function createFinanceBot(config, fetcher = fetch, providedStore = 
     try {
       const url = new URL(req.url, 'http://local');
       if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('Finance Bot running!'); return; }
-      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, reminderApiVersion: reminderSender ? 4 : 0, backgroundApiVersion:background?1:0, storage: store.kind }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { await list(); json(200, { ok: true, syncApiVersion: 1, reminderApiVersion: reminderSender ? 5 : 0, backgroundApiVersion:background?1:0, storage: store.kind }); return; }
       if (url.pathname.startsWith('/finance/')) {
         if (!authorize(req.headers.authorization, config.syncToken)) { json(401, { error: 'Unauthorized' }); return; }
         if(url.pathname==='/finance/worker/config'&&req.method==='POST'){

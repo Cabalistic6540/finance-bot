@@ -66,6 +66,7 @@ test('Firestore persists profile selection, deduplicates across workers, and res
     assert.equal(inserted.filter(Boolean).length, 1, 'Only one process creates the receipt');
     const receipt = inserted.find(Boolean);
     assert.equal(receipt.profileKey, 'kwan');
+    assert.equal(receipt.senderHash, digest(owner), 'Image sender is retained as a one-way hash for recipient-specific reminder suppression');
     const claims = await Promise.all([store.claim(receipt.id), second.claim(receipt.id)]);
     assert.equal(claims.filter(Boolean).length, 1, 'Only one process downloads and analyzes the image');
     const claimed = claims.find(Boolean); const bytes = Buffer.alloc(IMAGE_CHUNK_BYTES * 2 + 123, 0xab);
