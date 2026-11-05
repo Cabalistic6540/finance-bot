@@ -1,6 +1,6 @@
 import { createFinanceBot, loadConfig } from './bot.mjs';
 import { createFirestoreStore } from './storage.mjs';
-import { createReminderStore, createReminderSender } from './reminders.mjs';
+import { createReminderStore, createReminderSender, createScheduledReminderRunner } from './reminders.mjs';
 import {createFirestoreProcessingStore,createBackgroundProcessor} from './background.mjs';
 
 try {
@@ -15,7 +15,7 @@ try {
     const firebase = initializeApp({ credential: cert(serviceAccount) });
     const db = getFirestore(firebase);
     store = await createFirestoreStore(db);
-    reminders = createReminderSender(config, createReminderStore(db));
+    reminders = createReminderSender(config, createReminderStore(db), fetch, () => new Date(), store);
     background = createBackgroundProcessor(config,store,await createFirestoreProcessingStore(db));
   }
   const bot = await createFinanceBot(config, fetch, store, reminders,background);
@@ -23,7 +23,10 @@ try {
   bot.server.listen(port, '0.0.0.0', () => console.log(`Finance Bot listening on port ${port}`));
   const timer = setInterval(() => bot.drain().catch(() => {}), 10000);
   bot.drain().catch(() => {});
-  const stop = () => { clearInterval(timer); bot.server.close(async () => { await bot.close(); process.exit(0); }); };
+  const runReminder = reminders ? createScheduledReminderRunner(reminders) : async () => {};
+  const reminderTimer = setInterval(() => runReminder().catch(() => console.error('Scheduled reminder check failed; will retry.')), 30000);
+  runReminder().catch(() => console.error('Scheduled reminder check failed; will retry.'));
+  const stop = () => { clearInterval(timer); clearInterval(reminderTimer); bot.server.close(async () => { await bot.close(); process.exit(0); }); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 } catch (error) {
   console.error('Finance Bot could not start. Check credentials, storage access, and required settings.');

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createReminderStore, createReminderSender, reminderClock, reminderMessage } from './reminders.mjs';
+import { createReminderStore, createReminderSender, reminderClock, reminderMessage, receivedImageAfterAfternoon, createScheduledReminderRunner } from './reminders.mjs';
+import { createHash } from 'node:crypto';
 import { salaryDatesForMonth } from './payday-calendar.mjs';
 
 function memoryDb() {
@@ -87,4 +88,48 @@ test('Sunday payday sends on the preceding Saturday, never on the original Sunda
     assert.equal(result.sent, shouldSend, date);
     assert.equal(calls, shouldSend ? 1 : 0, date);
   }
+});
+
+test('afternoon and evening each send once, and concurrent wakeups cannot repeat either slot', async () => {
+  const db=memoryDb();let calls=0;let now=new Date('2026-11-05T09:00:00Z');
+  const sender=createReminderSender(config,createReminderStore(db),async()=>{calls++;return new Response('{}');},()=>now,{list:async()=>[]});
+  const today={...input,date:'2026-11-05'};
+  assert.equal((await sender(today)).hour,16);
+  assert.equal((await sender(today)).reason,'already-handled');
+  now=new Date('2026-11-05T13:00:00Z');
+  const results=await Promise.all([sender(today),sender(today)]);
+  assert.equal(results.filter(r=>r.sent).length,1);
+  assert.equal(calls,2);
+  now=new Date('2026-11-05T14:00:00Z');
+  assert.equal((await sender(today)).reason,'outside-reminder-window');
+});
+
+test('an owner image received since 16:00 suppresses 20:00 even while pending OCR',async()=>{
+  let calls=0;
+  const image={messageId:'100',kind:'image',status:'pending',senderHash:createHash('sha256').update(config.owners[0]).digest('hex'),receivedAt:'2026-11-05T09:00:00Z'};
+  const sender=createReminderSender(config,createReminderStore(memoryDb()),async()=>{calls++;return new Response('{}');},()=>new Date('2026-11-05T13:00:00Z'),{list:async()=>[image]});
+  assert.equal((await sender({...input,date:'2026-11-05'})).reason,'image-received-since-16:00');
+  const preview=await sender({...input,date:'2026-11-05',dryRun:true});
+  assert.equal(preview.eligible,false);assert.equal(preview.skippedForReceipt,true);assert.equal(calls,0);
+  const now=new Date('2026-11-05T13:00:00Z');
+  assert.equal(receivedImageAfterAfternoon([{...image,receivedAt:'2026-11-05T08:59:59Z'}],config.owners,'2026-11-05',now),false);
+  assert.equal(receivedImageAfterAfternoon([{...image,receivedAt:'2026-11-04T12:00:00Z'}],config.owners,'2026-11-05',now),false);
+  assert.equal(receivedImageAfterAfternoon([{...image,receivedAt:'2026-11-05T13:00:01Z'}],config.owners,'2026-11-05',now),false);
+  assert.equal(receivedImageAfterAfternoon([{...image,senderHash:'another-owner'}],config.owners,'2026-11-05',now),false);
+  assert.equal(receivedImageAfterAfternoon([{...image,kind:'profile'}],config.owners,'2026-11-05',now),false);
+  assert.equal(receivedImageAfterAfternoon([{...image,senderHash:undefined}],config.owners,'2026-11-05',now),true,'Earlier receipts from the sole configured owner remain compatible');
+});
+
+test('failed receipt lookup cannot send an unwanted evening repeat',async()=>{
+  let calls=0;
+  const sender=createReminderSender(config,createReminderStore(memoryDb()),async()=>{calls++;},()=>new Date('2026-11-05T13:00:00Z'),{list:async()=>{throw Error('inbox unavailable');}});
+  await assert.rejects(sender({...input,date:'2026-11-05'}),/inbox unavailable/);assert.equal(calls,0);
+});
+
+test('background runner checks actual payday and hour and excludes overlapping work',async()=>{
+  let now=new Date('2026-11-05T08:59:59Z');let calls=0;let finish;
+  const runner=createScheduledReminderRunner(async value=>{calls++;assert.equal(value.hour,16);return new Promise(resolve=>{finish=resolve;});},()=>now);
+  await runner();assert.equal(calls,0);
+  now=new Date('2026-11-05T09:00:00Z');const pending=runner();await runner();assert.equal(calls,1);finish({sent:true});await pending;
+  now=new Date('2026-11-06T09:00:00Z');await runner();assert.equal(calls,1);
 });

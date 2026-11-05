@@ -13,9 +13,16 @@ export function reminderClock(now = new Date()) {
   const part = (type) => parts.find((p) => p.type === type).value;
   return { date: `${part('year')}-${part('month')}-${part('day')}`, hour: Number(part('hour')) };
 }
-export function reminderMessage(ids) {
+export function reminderMessage(ids, hour = 20) {
   if (!Array.isArray(ids) || !ids.length || ids.length > Object.keys(names).length || ids.some((id) => !Object.hasOwn(names, id)) || new Set(ids).size !== ids.length) throw new Error('Invalid reminder creditors');
-  return `วันนี้เงินเดือนออกครับ\nรายการในรอบเงินเดือนนี้: ${ids.map((id) => names[id]).join(', ')}\nอย่าลืมส่งสลิปหลังชำระเงินนะครับ\nถ้าส่งสลิปให้บอทแล้ว ข้ามข้อความนี้ได้เลยครับ`;
+  return `วันนี้เงินเดือนออกครับ · เตือนรอบ ${hour}:00 น.\nรายการในรอบเงินเดือนนี้: ${ids.map((id) => names[id]).join(', ')}\nอย่าลืมส่งสลิปหลังชำระเงินนะครับ${hour === 16 ? '\nหากส่งภาพสลิปตั้งแต่ 16:00 น. แล้ว วันนี้จะไม่เตือนซ้ำตอน 20:00 น. ครับ' : ''}`;
+}
+export function receivedImageAfterAfternoon(records, owners, date, now) {
+  const ownerHash = createHash('sha256').update(owners[0]).digest('hex');
+  const start = Date.parse(`${date}T16:00:00+07:00`);
+  return records.some(record => record.kind !== 'profile' && /^\d{1,40}$/.test(record.messageId || '') &&
+    (record.senderHash === ownerHash || (!record.senderHash && owners.length === 1)) &&
+    Date.parse(record.receivedAt) >= start && Date.parse(record.receivedAt) <= now.getTime());
 }
 export function createReminderStore(db) {
   const collection = db.collection(REMINDER_COLLECTION);
@@ -39,17 +46,25 @@ export function createReminderStore(db) {
     },
   };
 }
-export function createReminderSender(config, store, fetcher = fetch, clock = () => new Date()) {
+export function createReminderSender(config, store, fetcher = fetch, clock = () => new Date(), receiptStore = null) {
   return async (input) => {
     const now = clock(); const current = reminderClock(now);
-    const text = reminderMessage(input.creditorIds);
+    const hour = input.hour ?? (current.hour === 16 ? 16 : 20);
+    if (![16, 20].includes(hour)) throw new Error('Invalid reminder hour');
+    const text = reminderMessage(input.creditorIds, hour);
     if (input.date !== current.date) throw new Error('Reminder date must be today in Bangkok');
     const isSalaryDay = !!salaryPeriodForDate(current.date);
-    if (input.dryRun === true) return { ok: true, dryRun: true, eligible: isSalaryDay && current.hour >= 20, date: current.date, text };
+    // Receipt arrival is enough: do not require OCR completion or a payment entry.
+    // A missing/unhealthy inbox must fail closed rather than send an unwanted repeat.
+    const receivedImage = hour === 20 && isSalaryDay && receiptStore
+      ? receivedImageAfterAfternoon(await receiptStore.list(), config.owners, current.date, now) : false;
+    if (input.dryRun === true) return { ok: true, dryRun: true, eligible: isSalaryDay && current.hour === hour && !receivedImage, skippedForReceipt: receivedImage, date: current.date, hour, text };
     if (!isSalaryDay) return { ok: true, sent: false, reason: 'not-salary-day', date: current.date };
-    if (current.hour < 20) return { ok: true, sent: false, reason: 'before-20:00', date: current.date };
+    if (current.hour !== hour) return { ok: true, sent: false, reason: current.hour < hour ? `before-${hour}:00` : 'outside-reminder-window', date: current.date, hour };
+    if (receivedImage) return { ok: true, sent: false, reason: 'image-received-since-16:00', date: current.date, hour };
     const recipient = config.owners[0];
-    const key = createHash('sha256').update(`${recipient}|${current.date}`).digest('hex');
+    // Preserve the existing evening key so earlier deployments cannot repeat it.
+    const key = createHash('sha256').update(`${recipient}|${current.date}${hour === 16 ? '|16' : ''}`).digest('hex');
     const record = await store.claim(key, text, current.date, now.getTime());
     if (!record) return { ok: true, sent: false, reason: 'already-handled', date: current.date };
     let response;
@@ -66,6 +81,30 @@ export function createReminderSender(config, store, fetcher = fetch, clock = () 
     const accepted = response.ok || (response.status === 409 && !!response.headers.get('x-line-accepted-request-id'));
     await store.finish(key, record.leaseId, accepted ? 'accepted' : response.status >= 500 ? 'retry' : 'blocked', now.getTime());
     if (!accepted) throw new Error('LINE did not accept reminder');
-    return { ok: true, sent: true, accepted: true, date: current.date };
+    return { ok: true, sent: true, accepted: true, date: current.date, hour };
+  };
+}
+
+export function salaryReminderCreditors(date) {
+  const period = salaryPeriodForDate(date);
+  if (!period) return [];
+  const month = period.nominalDate.slice(0, 7);
+  if (period.nominalDay === 5) return ['umay', 'first-choice-mastercard', 'student-loan',
+    ...(month >= '2026-11' && month <= '2027-09' ? ['shopee'] : [])];
+  return ['car-refinance', 'first-choice-visa', 'promise', 'line-bk', 'insurance', 'wangjai',
+    ...(month >= '2026-11' && month <= '2027-01' ? ['tiktok'] : [])];
+}
+
+export function createScheduledReminderRunner(sender, clock = () => new Date()) {
+  let running = false;
+  return async () => {
+    if (running) return;
+    const current = reminderClock(clock());
+    if (![16, 20].includes(current.hour)) return;
+    const creditorIds = salaryReminderCreditors(current.date);
+    if (!creditorIds.length) return;
+    running = true;
+    try { return await sender({date: current.date, hour: current.hour, creditorIds}); }
+    finally { running = false; }
   };
 }

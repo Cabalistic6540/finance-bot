@@ -16,7 +16,7 @@ export function profileCommand(text) {
   return null;
 }
 function newRecord(event, profileKey, change) {
-  return { id: hash(event.message.id), messageId: event.message.id, profileKey,
+  return { id: hash(event.message.id), messageId: event.message.id, profileKey, senderHash: hash(event.source.userId),
     kind: change ? 'profile' : 'image', status: change ? 'complete' : 'pending',
     replyToken: change ? null : event.replyToken || null, attempts: 0, receivedAt: new Date().toISOString() };
 }
