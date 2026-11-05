@@ -1,5 +1,5 @@
 import {randomUUID,createHash} from 'node:crypto';
-const SITE='https://tos-personal-finance.roundbuddy35.chatgpt.site';
+const SITE='https://tos-personal-finance.panaddakwan.chatgpt.site';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 export async function createFirestoreProcessingStore(db){
  const jobs=db.collection('financeReceiptProcessing_v1'),configRef=db.collection('financeWorkerConfig_v1').doc('site');
