@@ -1,0 +1,26 @@
+name: Wake payday reminders
+
+on:
+  schedule:
+    # Pre-warm at 15:55/19:55; retry at the 16:00/20:00 boundary.
+    - cron: '55 8,12 * * *'
+    - cron: '0 9,13 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: payday-reminder-wakeup
+  cancel-in-progress: false
+
+jobs:
+  wake-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wake the bot for its private salary-day check
+        shell: bash
+        run: |
+          # This public health request contains no credentials or finance data.
+          # The bot checks its clock, payday calendar, inbox and delivery history.
+          curl --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 15 --connect-timeout 15 --max-time 90 https://finance-bot-xwvv.onrender.com/health
